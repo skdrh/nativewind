@@ -42,9 +42,9 @@ export function testPseudoClasses(
   interaction: Interaction | undefined,
   meta: PseudoClassesQuery,
 ) {
-  if (meta.active && !interaction?.active.get()) return false;
-  if (meta.hover && !interaction?.hover.get()) return false;
-  if (meta.focus && !interaction?.focus.get()) return false;
+  if (meta.active && !interaction?.active) return false;
+  if (meta.hover && !interaction?.hover) return false;
+  if (meta.focus && !interaction?.focus) return false;
   return true;
 }
 
@@ -81,8 +81,8 @@ export function testContainerQuery(
     if (!query.condition) return true;
 
     return testCondition(query.condition, {
-      width: container.interaction.layout.width,
-      height: container.interaction.layout.height,
+      width: container.interaction.layoutWidth,
+      height: container.interaction.layoutHeight,
     });
   });
 }

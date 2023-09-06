@@ -21,6 +21,7 @@ export function render<P>(
     // String components are not supported by the interop
     return jsx(type, ...args);
   }
+
   const cssInterop = interopFunctions.get(type);
   return cssInterop ? cssInterop(jsx, type, ...args) : jsx(type, ...args);
 }

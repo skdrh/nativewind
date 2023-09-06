@@ -1,62 +1,158 @@
-import { ComponentType, forwardRef, useReducer } from "react";
+import { MutableRefObject, forwardRef, useRef } from "react";
 import { View, Pressable } from "react-native";
 
-import { ContainerContext } from "./native/misc";
+import type { ComponentType, InteropFunction } from "../types";
 import { useStyledProps } from "./native/use-computed-props";
-import type {
-  InteropFunction,
-  InteropFunctionOptions,
-  JSXFunction,
-} from "../types";
-import { VariableContext } from "./native/variables";
+import { ComponentContextProvider, useComponentContext } from "./native/proxy";
+import { styleSpecificityCompareFn } from "./specificity";
+import { StyleSheet, getGlobalStyle } from "./native/stylesheet";
+import { styleMetaMap } from "../testing-library";
+import { useComputation } from "./signals";
+import { NormalizedOptions } from "./native/prop-mapping";
+
+type InteropComponentProps<
+  P extends Record<string, any> = Record<string, unknown>,
+> = P & {
+  ___component: ComponentType<P>;
+  ___jsx: any;
+  ___options: NormalizedOptions<P>;
+  ___pressable?: true;
+};
 
 export const defaultCSSInterop: InteropFunction = (
   options,
   jsx,
-  type,
+  component,
   props,
-  key,
   ...args
 ) => {
-  if (!options.useWrapper) {
-    return jsx(type, props, key);
-  }
-
   return jsx(
-    CSSInteropWrapper,
+    CSSInteropPropMapper as any,
     {
       ...props,
-      __component: type,
-      __jsx: jsx,
-      __options: options,
+      ___component: component,
+      ___jsx: jsx,
+      ___options: options,
     },
-    key,
     ...args,
   );
 };
 
-type CSSInteropWrapperProps<P = any> = {
-  __component: ComponentType<P>;
-  __jsx: JSXFunction<P>;
-  __options: InteropFunctionOptions<P>;
-} & P;
-
-export const CSSInteropWrapper = forwardRef(function CSSInteropWrapper(
-  {
-    __component: component,
-    __jsx: jsx,
-    __options: options,
+const CSSInteropPropMapper = forwardRef(function CSSInteropPropMapper<
+  P extends Record<string, unknown>,
+>(props: InteropComponentProps<P>, ref: unknown) {
+  const {
+    ___component: component,
+    ___jsx: jsx,
+    ___options: options,
+    ___pressable,
     ...$props
-  }: CSSInteropWrapperProps,
-  ref,
-) {
-  const rerender = useRerender();
+  } = props;
 
-  /**
-   * If the development environment is enabled, we should rerender all components if the StyleSheet updates.
-   * This is because things like :root variables may have updated.
-   */
-  const { styledProps, meta } = useStyledProps($props, jsx, options, rerender);
+  const { styledProps, useWrapper } = useComputation(
+    () => {
+      let useWrapper = false;
+      const newProps: Partial<Record<keyof P, unknown>> = {};
+
+      for (const [target, { sources, nativeStyleToProp }] of options.config) {
+        let styles = [];
+
+        useWrapper ||= Boolean(nativeStyleToProp);
+
+        for (const sourceProp of sources) {
+          const source = props[sourceProp];
+          if (typeof source !== "string") continue;
+
+          StyleSheet.unstable_hook_onClassName(source);
+
+          for (const className of source.split(/\s+/)) {
+            const style = getGlobalStyle(className);
+            if (style !== undefined) {
+              if (Array.isArray(style)) {
+                styles.push(...style);
+                useWrapper ||= style.some((s: any) => styleMetaMap.has(s));
+              } else {
+                styles.push(style);
+                useWrapper ||= styleMetaMap.has(style as any);
+              }
+            }
+          }
+        }
+
+        const style = props[target];
+        if (style !== undefined) {
+          if (Array.isArray(style)) {
+            styles.push(...style);
+            useWrapper ||= style.some((s) => styleMetaMap.has(s));
+          } else {
+            styles.push(style);
+            useWrapper ||= styleMetaMap.has(style as any);
+          }
+        }
+
+        if (styles.length > 1) {
+          styles = styles.sort(styleSpecificityCompareFn);
+        } else {
+          styles = styles[0];
+        }
+
+        newProps[target] = styles;
+      }
+      return { styledProps: newProps, useWrapper };
+    },
+    options.dependencies.map((prop) => props[prop]),
+  );
+
+  if (useWrapper) {
+    const newProps: typeof props = {
+      ...props,
+      ...styledProps,
+      ___pressable,
+      ref,
+    };
+
+    for (const source of options.sources) {
+      delete newProps[source];
+    }
+
+    return jsx(CSSInteropRuntime, newProps);
+  } else {
+    const newProps = {
+      ...$props,
+      ...styledProps,
+      ref,
+    };
+
+    for (const source of options.sources) {
+      delete newProps[source];
+    }
+
+    return jsx(component, newProps);
+  }
+});
+
+const CSSInteropRuntime = forwardRef(function CSSInteropRuntime<
+  P extends Record<string, any>,
+>(
+  {
+    ___component: component,
+    ___jsx: jsx,
+    ___options: options,
+    ___pressable: wasConvertedToPressable,
+    ...$props
+  }: InteropComponentProps<P>,
+  ref: unknown,
+) {
+  const componentContext = useComponentContext();
+  const propsRef = useRef($props);
+  propsRef.current = $props;
+
+  const { styledProps, meta } = useStyledProps(
+    propsRef as unknown as MutableRefObject<P>,
+    componentContext,
+    jsx,
+    options.config,
+  );
 
   const props = {
     ...$props,
@@ -64,11 +160,11 @@ export const CSSInteropWrapper = forwardRef(function CSSInteropWrapper(
     ref,
   };
 
-  // View doesn't support the interaction props, so switch to a Pressable (which accepts ViewProps)
-  if (meta.convertToPressable && !props.$$pressable) {
-    props.$$pressable = true;
-    if (component === View) {
-      component = Pressable as ComponentType<unknown>;
+  // View doesn't support the interaction props, so force the component to be a Pressable (which accepts ViewProps)
+  if (meta.convertToPressable && !wasConvertedToPressable) {
+    (props as any).___pressable = true;
+    if ((component as any) === View) {
+      component = Pressable as ComponentType<P>;
     }
   }
 
@@ -83,31 +179,16 @@ export const CSSInteropWrapper = forwardRef(function CSSInteropWrapper(
         ...props,
         __component: component,
         __meta: meta,
+        __jsx: jsx,
       },
       meta.animationInteropKey,
     );
   } else {
-    finalComponent = jsx(component, props, "react-native-css-interop");
+    finalComponent = jsx(component, props, "css-interop");
   }
 
-  if (meta.hasInlineVariables) {
-    finalComponent = jsx(
-      VariableContext.Provider,
-      { value: meta.variables, children: [finalComponent] } as const,
-      "variable",
-    );
-  }
-
-  if (meta.hasInlineContainers) {
-    finalComponent = jsx(
-      ContainerContext.Provider,
-      { value: meta.containers, children: [finalComponent] },
-      "container",
-    );
-  }
-
-  return finalComponent;
+  return jsx(ComponentContextProvider, {
+    value: componentContext,
+    children: [finalComponent],
+  } as const);
 });
-
-export const useRerender = () => useReducer(rerenderReducer, 0)[1];
-const rerenderReducer = (accumulator: number) => accumulator + 1;

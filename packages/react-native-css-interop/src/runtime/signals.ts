@@ -1,6 +1,5 @@
-import { useMemo, useEffect, useState, useReducer } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 
-import { Signal } from "../types";
 /*
  * This file handles the style reactivity.
  *
@@ -20,16 +19,24 @@ import { Signal } from "../types";
  *
  * Batching is not implemented.
  */
+export interface Signal<T = unknown> {
+  get(): T;
+  snapshot(): T;
+  set(value: T): void;
+  stale(change: 1 | -1, fresh: boolean): void;
+  subscribe(callback: () => void): () => void;
+  unsubscribe(callback: Computation | ((value: T) => void)): boolean;
+  subscriptions: Set<Computation | ((value: T) => void)>;
+  cleanup: () => void;
+}
 
-interface Computation<T = unknown> {
+export interface Computation<T = unknown> extends Signal<T> {
   /** The function that is being tracked */
   fn: () => T;
   /** The number of dependencies waiting to be resolved */
   waiting: number;
   /** Has something actually changed */
   fresh: boolean;
-  /** Where the result of fn() is stored */
-  signal: Signal<T>;
   /** Execute fn() in a new context */
   execute(): void;
   /**
@@ -38,7 +45,7 @@ interface Computation<T = unknown> {
    */
   snapshot(): T;
   /** The subscriptions dependencies */
-  dependencies: Set<Set<Computation | (() => void)>>;
+  dependencies: Set<Set<Computation | ((value: T) => void)>>;
   /** Manually subscribe to the computation outside of a context */
   subscribe(callback: () => void): () => void;
   /** Update the fn() and re-execute */
@@ -59,12 +66,9 @@ const context: Computation[] = [];
 /**
  * Signals make values reactive, as going through function calls to get/set values for them enables the automatic
  * dependency tracking and computation re-execution
- *
- * @typedef T - the value of the signal
- * @returns {Signal<T>} - the signal
  */
 export function createSignal<T = unknown>(value: T): Signal<T> {
-  const subscriptions = new Set<Computation | (() => void)>();
+  const subscriptions: Signal["subscriptions"] = new Set();
 
   const get = () => {
     const running = context[context.length - 1];
@@ -84,26 +88,46 @@ export function createSignal<T = unknown>(value: T): Signal<T> {
 
     stale(1, true);
     stale(-1, true);
+
+    // Function subscriptions are typically React components, which
+    // cannot be updated while rendering, so we defer the updates.
+    setImmediate(() => {
+      for (const subscriber of subscriptions) {
+        if (typeof subscriber === "function") {
+          subscriber(value);
+        }
+      }
+    });
   };
 
   const stale = (change: 1 | -1, fresh: boolean): void => {
-    for (const subscriber of [...subscriptions]) {
-      if (typeof subscriber === "function") {
-        subscriber();
-      } else {
+    for (const subscriber of subscriptions) {
+      if (typeof subscriber !== "function") {
         subscriber.stale(change, fresh);
       }
     }
   };
 
-  const subscribe = (callback: () => void) => {
-    subscriptions.add(callback);
-    return () => {
-      subscriptions.delete(callback);
-    };
+  const subscribe = (callback: (value: T) => void) => {
+    let cb = callback as (value: unknown) => void;
+    subscriptions.add(cb);
+    return () => subscriptions.delete(cb);
   };
 
-  return { get, set, stale, subscribe, snapshot };
+  const unsubscribe = (callback: () => void) => subscriptions.delete(callback);
+
+  const cleanup = () => subscriptions.clear();
+
+  return {
+    get,
+    set,
+    stale,
+    subscribe,
+    unsubscribe,
+    subscriptions,
+    snapshot,
+    cleanup,
+  };
 }
 
 function cleanup(running: Computation) {
@@ -113,19 +137,14 @@ function cleanup(running: Computation) {
   running.dependencies.clear();
 }
 
-function createComputation<T = unknown>(fn: () => T) {
-  const computation: Computation<T> = {
+export function createComputation<T = unknown>(fn: () => T): Computation<T> {
+  const signal = createSignal<unknown>(undefined);
+  const computation: Computation = {
+    ...signal,
     fn,
     waiting: 0,
     fresh: false,
-    signal: createSignal(undefined) as Signal<T>,
     dependencies: new Set(),
-    snapshot() {
-      return computation.signal.snapshot();
-    },
-    subscribe(callback: () => void) {
-      return this.signal.subscribe(callback);
-    },
     execute() {
       cleanup(computation);
       context.push(computation);
@@ -133,7 +152,7 @@ function createComputation<T = unknown>(fn: () => T) {
       this.waiting = 0;
       this.fresh = false;
 
-      this.signal.set(this.fn());
+      this.set(this.fn());
       context.pop();
     },
     update(fn: () => T) {
@@ -145,7 +164,7 @@ function createComputation<T = unknown>(fn: () => T) {
       if (!this.waiting && change < 0) return;
 
       if (!this.waiting && change > 0) {
-        this.signal.stale(1, false);
+        signal.stale(1, false);
       }
 
       this.waiting += change;
@@ -158,14 +177,14 @@ function createComputation<T = unknown>(fn: () => T) {
           this.execute();
         }
 
-        this.signal.stale(-1, false);
+        signal.stale(-1, false);
       }
     },
   };
 
   computation.execute();
 
-  return computation;
+  return computation as Computation<T>;
 }
 
 /**
@@ -182,13 +201,11 @@ function createComputation<T = unknown>(fn: () => T) {
 export function useComputation<T>(
   fn: () => T,
   dependencies: unknown[] = [],
-  rerender: () => void = useRerender(),
 ): T {
-  const [computation] = useState(() => createComputation(fn));
-  useMemo(() => computation.update(fn), dependencies);
-  useEffect(() => computation.subscribe(rerender), [computation]);
-  return computation.snapshot();
+  const computation = useMemo(() => createComputation(fn), [dependencies]);
+  return useSyncExternalStore(
+    computation.subscribe,
+    computation.snapshot,
+    computation.snapshot,
+  );
 }
-
-export const useRerender = () => useReducer(rerenderReducer, 0)[1];
-const rerenderReducer = (accumulator: number) => accumulator + 1;

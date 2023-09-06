@@ -76,9 +76,11 @@ export const AnimationInterop = forwardRef(function Animated(
 /**
  * Returns if the component layout is calculated. If layout is not required, this will always return true
  */
-function useIsLayoutReady({ requiresLayout, interaction }: InteropMeta) {
+function useIsLayoutReady({ requiresLayout, componentContext }: InteropMeta) {
   const [layoutReady, setLayoutReady] = useState(
-    requiresLayout ? interaction.layout.width.get() !== 0 : true,
+    requiresLayout
+      ? componentContext.interaction.layoutWidth.get() !== 0
+      : true,
   );
 
   useEffect(() => {
@@ -87,10 +89,12 @@ function useIsLayoutReady({ requiresLayout, interaction }: InteropMeta) {
     }
 
     // We only need to listen for a single layout change
-    const subscription = interaction.layout.width.subscribe(() => {
-      setLayoutReady(true);
-      subscription();
-    });
+    const subscription = componentContext.interaction.layoutWidth.subscribe(
+      () => {
+        setLayoutReady(true);
+        subscription();
+      },
+    );
     return () => subscription();
   }, [layoutReady]);
 
@@ -221,7 +225,7 @@ function useAnimations(
   animationDurations: Time[],
   animationIterationCounts: AnimationIterationCount[],
   style: Record<string, unknown>,
-  { variables, inheritedContainers: containers, interaction }: InteropMeta,
+  { componentContext: context }: InteropMeta,
   isLayoutReady: boolean,
 ) {
   const animations = useMemo(() => {
@@ -249,10 +253,7 @@ function useAnimations(
       > = {};
 
       for (const { style: $style, selector: progress } of keyframes.frames) {
-        const flatStyle = flattenStyle($style, {
-          variables,
-          interaction,
-          containers,
+        const flatStyle = flattenStyle($style, context, {
           ch: typeof style.height === "number" ? style.height : undefined,
           cw: typeof style.width === "number" ? style.width : undefined,
         });

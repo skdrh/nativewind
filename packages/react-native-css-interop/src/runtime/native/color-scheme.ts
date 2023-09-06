@@ -1,16 +1,15 @@
-import { Appearance, useColorScheme as useRNColorScheme } from "react-native";
-import { createSignal } from "../signals";
+import { Appearance } from "react-native";
+import { createSignal, useComputation } from "../signals";
 import { INTERNAL_RESET } from "../../shared";
-import { resetDefaultVariables, resetRootVariables } from "./variables";
 
 export const colorScheme = createColorScheme(Appearance);
 
 export function useColorScheme() {
-  useRNColorScheme();
+  const scheme = useComputation(() => colorScheme.get());
   return {
-    get: colorScheme.get,
-    set: colorScheme.set,
-    toggle: colorScheme.toggle,
+    scheme,
+    setColorScheme: colorScheme.set,
+    toggleColorScheme: colorScheme.toggle,
   };
 }
 
@@ -30,8 +29,6 @@ function createColorScheme(appearance: typeof Appearance) {
 
     signal.set(newColorScheme);
     appearance.setColorScheme(newColorScheme);
-    resetRootVariables(newColorScheme);
-    resetDefaultVariables(newColorScheme);
   };
 
   const toggle = () => {
@@ -59,5 +56,10 @@ function createColorScheme(appearance: typeof Appearance) {
     signal.set(appearance.getColorScheme() ?? "light");
   };
 
-  return { get: signal.get, set, toggle, [INTERNAL_RESET]: reset };
+  return {
+    get: signal.get,
+    set,
+    toggle,
+    [INTERNAL_RESET]: reset,
+  };
 }

@@ -24,19 +24,11 @@ import {
 } from "./misc";
 import { INTERNAL_FLAGS as INTERNAL_FLAGS, INTERNAL_RESET } from "../../shared";
 import { colorScheme } from "./color-scheme";
-import {
-  getVariables,
-  resetDefaultVariables,
-  resetRootVariables,
-  resetVariables,
-} from "./variables";
 import { rem } from "./rem";
-import { createSignal } from "../signals";
+import { defaultVariables, rootVariables } from "./proxy";
 
 export const warnings = new Map<string, ExtractionWarning[]>();
 export const warned = new Set<string>();
-
-export const devForceReload = createSignal({});
 
 const commonStyleSheet: CommonStyleSheet = {
   [INTERNAL_FLAGS]: {},
@@ -49,7 +41,7 @@ const commonStyleSheet: CommonStyleSheet = {
     vw[INTERNAL_RESET](dimensions);
     vh[INTERNAL_RESET](dimensions);
     colorScheme[INTERNAL_RESET](appearance);
-    resetVariables();
+    // resetVariables();
   },
   getFlag(name) {
     return this[INTERNAL_FLAGS][name];
@@ -79,45 +71,28 @@ const commonStyleSheet: CommonStyleSheet = {
       }
     }
 
-    const currentColor = colorScheme.get();
-    let shouldResetRootVariables = false;
-    let shouldResetDefaultVariables = false;
-
-    const variables = getVariables();
-
     if (options.rootVariables) {
-      Object.assign(variables.rootVariables, options.rootVariables);
-      shouldResetRootVariables = true;
+      for (const [key, value] of Object.entries(options.rootVariables)) {
+        rootVariables[key].setLight(value);
+      }
     }
     if (options.rootDarkVariables) {
-      Object.assign(variables.rootDarkVariables, options.rootDarkVariables);
-      shouldResetRootVariables ||= currentColor === "dark";
+      for (const [key, value] of Object.entries(options.rootDarkVariables)) {
+        rootVariables[key].setDark(value);
+      }
     }
 
     if (options.defaultVariables) {
-      Object.assign(variables.defaultVariables, options.defaultVariables);
-      shouldResetRootVariables = true;
-      shouldResetDefaultVariables = true;
+      for (const [key, value] of Object.entries(options.defaultVariables)) {
+        defaultVariables[key].setLight(value);
+      }
     }
 
     if (options.defaultDarkVariables) {
-      shouldResetRootVariables ||= currentColor === "dark";
-      shouldResetDefaultVariables ||= currentColor === "dark";
-      Object.assign(
-        variables.defaultDarkVariables,
-        options.defaultDarkVariables,
-      );
+      for (const [key, value] of Object.entries(options.defaultDarkVariables)) {
+        defaultVariables[key].setDark(value);
+      }
     }
-
-    if (shouldResetRootVariables) {
-      resetRootVariables(currentColor);
-    }
-
-    if (shouldResetDefaultVariables) {
-      resetDefaultVariables(currentColor);
-    }
-
-    devForceReload.set({});
   },
 };
 
@@ -217,18 +192,14 @@ function tagStyles(
   }
 }
 
-export function getGlobalStyle(style?: string | object) {
-  if (!style) return;
+export function getGlobalStyle(style?: any): StyleProp {
   if (typeof style === "string") {
-    StyleSheet.unstable_hook_onClassName(style);
-
     if (warnings.has(style) && !warned.has(style)) {
       warned.add(style);
       if (process.env.NODE_ENV === "development") {
         console.log(warnings.get(style));
       }
     }
-
     return globalStyles.get(style);
   } else {
     return opaqueStyles.get(style) ?? style;

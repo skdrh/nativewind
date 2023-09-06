@@ -16,10 +16,6 @@ import {
 
 import { defaultCSSInterop } from "./runtime/css-interop";
 import { interopFunctions, render } from "./runtime/render";
-import {
-  getInteropFunctionOptions,
-  getRemappedProps,
-} from "./runtime/render-options";
 import type {
   RemapProps,
   ComponentTypeWithMapping,
@@ -27,6 +23,7 @@ import type {
   InteropFunction,
   JSXFunction,
 } from "./types";
+import { getNormalizeConfig } from "./runtime/native/prop-mapping";
 
 export function unstable_styled<P extends object, M>(
   component: ComponentType<P>,
@@ -43,23 +40,17 @@ export function unstable_styled<P extends object, M>(
   }) as unknown as ComponentTypeWithMapping<P, M>;
 }
 
-export function globalCssInterop<P extends object, M>(
+export function globalCssInterop<P, M>(
   component: ComponentType<P>,
   mapping: EnableCssInteropOptions<P> & M,
   interop: InteropFunction = defaultCSSInterop,
 ) {
-  const map = new Map(Object.entries(mapping));
+  const config = getNormalizeConfig<P>(mapping);
 
-  interopFunctions.set(component, (jsx, type, props, key) => {
-    const options = getInteropFunctionOptions(props, map as any);
+  // console.log(component.displayName, mapping, config);
 
-    return interop<typeof props>(
-      options,
-      jsx,
-      type,
-      options.remappedProps,
-      key,
-    );
+  interopFunctions.set(component, (...args) => {
+    return (interop as any)(config, ...args);
   });
 
   return component as ComponentTypeWithMapping<P, M>;
@@ -69,11 +60,11 @@ export function remapProps<P, M>(
   component: ComponentType<P>,
   options: RemapProps<P> & M,
 ) {
-  const map = new Map(Object.entries(options));
+  // const map = new Map(Object.entries(options));
 
-  interopFunctions.set(component, (jsx, type, props, key) => {
-    return jsx(type, getRemappedProps(props, map as any), key);
-  });
+  // interopFunctions.set(component, (jsx, type, props, key) => {
+  //   // return jsx(type, getRemappedProps(props, map as any), key);
+  // });
 
   return component as ComponentTypeWithMapping<P, M>;
 }
